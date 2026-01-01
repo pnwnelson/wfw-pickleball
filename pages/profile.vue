@@ -149,12 +149,11 @@
                     <template #prepend>
                       <v-icon
                         :color="
-                          !userStore?.profile?.teamName ||
-                          userStore?.profile?.teamName.trim() === '' ||
-                          userStore?.profile?.teamName.toLowerCase() ===
-                            'no team'
-                            ? 'error'
-                            : 'success'
+                          userStore.profile?.teamName &&
+                          userStore.profile.teamName.trim() !== '' &&
+                          userStore.profile.teamName.toLowerCase() !== 'no team'
+                            ? 'success'
+                            : 'error'
                         "
                       >
                         mdi-account-group
@@ -163,15 +162,15 @@
                     <v-list-item-title>Team Name</v-list-item-title>
                     <v-list-item-subtitle
                       :class="
-                        !userStore?.profile?.teamName ||
-                        userStore?.profile?.teamName.trim() === '' ||
-                        userStore?.profile?.teamName.toLowerCase() === 'no team'
-                          ? 'text-error'
-                          : ''
+                        userStore.profile?.teamName &&
+                        userStore.profile.teamName.trim() !== '' &&
+                        userStore.profile.teamName.toLowerCase() !== 'no team'
+                          ? ''
+                          : 'text-error'
                       "
                     >
                       {{
-                        userStore?.profile?.teamName
+                        userStore.profile?.teamName
                           ? userStore.profile.teamName
                           : "No team"
                       }}
@@ -182,7 +181,9 @@
                     <template #prepend>
                       <v-icon
                         :color="
-                          userStore.profile.scheduleSubmitted ? '' : 'error'
+                          userStore.profile.scheduleSubmitted
+                            ? 'success'
+                            : 'error'
                         "
                       >
                         mdi-calendar-check
@@ -196,8 +197,8 @@
                     >
                       {{
                         userStore.profile.scheduleSubmitted
-                          ? "Submitted"
-                          : "Not Submitted"
+                          ? "Finalized"
+                          : "Not Finalized"
                       }}
                     </v-list-item-subtitle>
                   </v-list-item>
@@ -232,14 +233,29 @@
               </v-btn>
 
               <v-btn
-                v-if="userStore.profile && !userStore.profile.scheduleSubmitted"
                 color="secondary"
                 prepend-icon="mdi-calendar-plus"
                 @click="handleAddSchedule"
               >
-                Add your schedule
+                Add to your schedule
+              </v-btn>
+
+              <v-btn
+                v-if="userStore.profile && !userStore.profile.scheduleSubmitted"
+                color="success"
+                prepend-icon="mdi-check-circle"
+                @click="showFinalizeDialog = true"
+              >
+                Finalize Schedule
               </v-btn>
             </div>
+
+            <UserSchedule
+              :schedule="userSchedule"
+              :loading="scheduleLoading"
+              @delete="handleDeleteScheduleEvent"
+              class="mt-4"
+            />
           </v-col>
         </v-row>
       </v-container>
@@ -250,6 +266,38 @@
       @submit="handleTeamDialogSubmit"
       @input-focus="snackbar.show = false"
     />
+
+    <ScheduleDialog
+      v-model="showScheduleDialog"
+      @submit="handleScheduleSubmit"
+    />
+
+    <v-dialog v-model="showFinalizeDialog" max-width="500">
+      <v-card>
+        <v-card-title class="text-h5">Finalize Schedule?</v-card-title>
+
+        <v-card-text>
+          <p class="mb-3">
+            Are you sure you want to finalize your schedule? This will lock in
+            your availability and will be used to automatically schedule
+            pickleball games.
+          </p>
+          <p class="text-warning">
+            <v-icon color="warning" class="mr-1">mdi-alert</v-icon>
+            Adding an event from your schedule after it is finalized will void
+            any scheduled pickleball games you belong to.
+          </p>
+        </v-card-text>
+
+        <v-card-actions>
+          <v-spacer />
+          <v-btn text @click="showFinalizeDialog = false">Cancel</v-btn>
+          <v-btn color="success" @click="handleFinalizeSchedule">
+            Confirm
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
 
     <v-snackbar
       v-model="snackbar.show"
@@ -272,6 +320,10 @@ const { user, logout } = useFirebaseAuth();
 const userStore = useUserStore();
 
 const showTeamDialog = ref(false);
+const showScheduleDialog = ref(false);
+const showFinalizeDialog = ref(false);
+const userSchedule = ref<any[]>([]);
+const scheduleLoading = ref(false);
 const snackbar = ref({
   show: false,
   message: "",
@@ -291,7 +343,43 @@ onMounted(async () => {
   if (user.value && !userStore.profile) {
     await userStore.fetchUserProfile(user.value.uid);
   }
+  await fetchUserSchedule();
 });
+
+// Fetch user's schedule from team
+const fetchUserSchedule = async () => {
+  if (!userStore.profile?.teamName || !user.value?.uid) {
+    userSchedule.value = [];
+    return;
+  }
+
+  scheduleLoading.value = true;
+  try {
+    const { $db } = useNuxtApp();
+    const { collection, query, where, getDocs } = await import(
+      "firebase/firestore"
+    );
+
+    const teamsRef = collection($db, "teams");
+    const q = query(
+      teamsRef,
+      where("teamName", "==", userStore.profile.teamName)
+    );
+    const querySnapshot = await getDocs(q);
+
+    if (!querySnapshot.empty) {
+      const teamData = querySnapshot.docs[0].data();
+      const userMember = teamData.members?.find(
+        (member: any) => member.uid === user.value?.uid
+      );
+      userSchedule.value = userMember?.schedule || [];
+    }
+  } catch (error) {
+    console.error("Error fetching schedule:", error);
+  } finally {
+    scheduleLoading.value = false;
+  }
+};
 
 const creationTime = computed(() => {
   if (!user.value?.metadata?.creationTime) return "Not available";
@@ -507,7 +595,196 @@ const handleTeamDialogSubmit = async (data: {
 };
 
 const handleAddSchedule = () => {
-  // TODO: Navigate to schedule creation page or open dialog
-  console.log("Add schedule clicked");
+  showScheduleDialog.value = true;
+};
+
+const handleScheduleSubmit = async (data: {
+  timeSlot: string;
+  eventType: string;
+}) => {
+  try {
+    const { $db } = useNuxtApp();
+    const { collection, query, where, getDocs, doc, updateDoc, arrayUnion } =
+      await import("firebase/firestore");
+
+    // Find the user's team
+    if (!userStore.profile?.teamName) {
+      snackbar.value = {
+        show: true,
+        message: "You must join a team before adding schedule events.",
+        color: "error",
+        timeout: -1,
+      };
+      return;
+    }
+
+    const teamsRef = collection($db, "teams");
+    const q = query(
+      teamsRef,
+      where("teamName", "==", userStore.profile.teamName)
+    );
+    const querySnapshot = await getDocs(q);
+
+    if (querySnapshot.empty) {
+      snackbar.value = {
+        show: true,
+        message: "Team not found.",
+        color: "error",
+        timeout: -1,
+      };
+      return;
+    }
+
+    const teamDoc = querySnapshot.docs[0];
+    const teamData = teamDoc.data();
+    const teamRef = doc($db, "teams", teamDoc.id);
+
+    // Find the user in the members array and add schedule event
+    const updatedMembers = teamData.members.map((member: any) => {
+      if (member.uid === user.value?.uid) {
+        return {
+          ...member,
+          schedule: [
+            ...(member.schedule || []),
+            {
+              timeSlot: data.timeSlot,
+              eventType: data.eventType,
+              addedAt: new Date(),
+            },
+          ],
+        };
+      }
+      return member;
+    });
+
+    // Update the team document with the modified members array
+    await updateDoc(teamRef, {
+      members: updatedMembers,
+    });
+
+    snackbar.value = {
+      show: true,
+      message: "Schedule event added successfully!",
+      color: "success",
+      timeout: 2000,
+    };
+
+    // Refresh the schedule
+    await fetchUserSchedule();
+
+    console.log("Schedule event added:", data);
+  } catch (error) {
+    console.error("Error adding schedule event:", error);
+    snackbar.value = {
+      show: true,
+      message: "Failed to add schedule event. Please try again.",
+      color: "error",
+      timeout: -1,
+    };
+  }
+};
+
+const handleDeleteScheduleEvent = async (index: number) => {
+  try {
+    const { $db } = useNuxtApp();
+    const { collection, query, where, getDocs, doc, updateDoc } = await import(
+      "firebase/firestore"
+    );
+
+    if (!userStore.profile?.teamName) {
+      return;
+    }
+
+    const teamsRef = collection($db, "teams");
+    const q = query(
+      teamsRef,
+      where("teamName", "==", userStore.profile.teamName)
+    );
+    const querySnapshot = await getDocs(q);
+
+    if (querySnapshot.empty) {
+      return;
+    }
+
+    const teamDoc = querySnapshot.docs[0];
+    const teamData = teamDoc.data();
+    const teamRef = doc($db, "teams", teamDoc.id);
+
+    // Remove the event at the specified index
+    const updatedMembers = teamData.members.map((member: any) => {
+      if (member.uid === user.value?.uid) {
+        const updatedSchedule = [...(member.schedule || [])];
+        updatedSchedule.splice(index, 1);
+        return {
+          ...member,
+          schedule: updatedSchedule,
+        };
+      }
+      return member;
+    });
+
+    await updateDoc(teamRef, {
+      members: updatedMembers,
+    });
+
+    // Set scheduleSubmitted to false when schedule is modified
+    const userRef = doc($db, "users", user.value!.uid);
+    await updateDoc(userRef, {
+      scheduleSubmitted: false,
+    });
+
+    // Update local store
+    await userStore.updateProfile({ scheduleSubmitted: false });
+
+    snackbar.value = {
+      show: true,
+      message: "Schedule event deleted successfully!",
+      color: "success",
+      timeout: 2000,
+    };
+
+    // Refresh the schedule
+    await fetchUserSchedule();
+  } catch (error) {
+    console.error("Error deleting schedule event:", error);
+    snackbar.value = {
+      show: true,
+      message: "Failed to delete schedule event. Please try again.",
+      color: "error",
+      timeout: -1,
+    };
+  }
+};
+
+const handleFinalizeSchedule = async () => {
+  try {
+    const { $db } = useNuxtApp();
+    const { doc, updateDoc } = await import("firebase/firestore");
+
+    // Update user's scheduleSubmitted status
+    const userRef = doc($db, "users", user.value!.uid);
+    await updateDoc(userRef, {
+      scheduleSubmitted: true,
+    });
+
+    // Update local store
+    await userStore.updateProfile({ scheduleSubmitted: true });
+
+    showFinalizeDialog.value = false;
+    snackbar.value = {
+      show: true,
+      message: "Schedule finalized successfully!",
+      color: "success",
+      timeout: 2000,
+    };
+  } catch (error) {
+    console.error("Error finalizing schedule:", error);
+    snackbar.value = {
+      show: true,
+      message: "Failed to finalize schedule. Please try again.",
+      color: "error",
+      timeout: -1,
+    };
+  }
 };
 </script>
