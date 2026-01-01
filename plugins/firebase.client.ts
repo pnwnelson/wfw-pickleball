@@ -1,9 +1,9 @@
-import { initializeApp } from 'firebase/app'
-import { getAuth } from 'firebase/auth'
-import { getFirestore } from 'firebase/firestore'
+import { initializeApp } from "firebase/app";
+import { getAuth } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
 
 export default defineNuxtPlugin(() => {
-  const config = useRuntimeConfig()
+  const config = useRuntimeConfig();
 
   const firebaseConfig = {
     apiKey: config.public.firebaseApiKey,
@@ -12,11 +12,11 @@ export default defineNuxtPlugin(() => {
     storageBucket: config.public.firebaseStorageBucket,
     messagingSenderId: config.public.firebaseMessagingSenderId,
     appId: config.public.firebaseAppId,
-  }
+  };
 
-  const app = initializeApp(firebaseConfig)
-  const auth = getAuth(app)
-  const db = getFirestore(app)
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
 
   return {
     provide: {
@@ -24,5 +24,5 @@ export default defineNuxtPlugin(() => {
       auth,
       db,
     },
-  }
-})
+  };
+});
