@@ -3,6 +3,20 @@
     <v-app-bar color="primary" elevation="2">
       <v-app-bar-title class="text-truncate">WFW Pickleball</v-app-bar-title>
       <v-spacer />
+      <v-btn
+        v-if="userStore.profile?.isDirector"
+        @click="navigateTo('/matches')"
+        prepend-icon="mdi-tennis"
+        class="d-none d-sm-flex mr-2"
+      >
+        Matches
+      </v-btn>
+      <v-btn
+        v-if="userStore.profile?.isDirector"
+        @click="navigateTo('/matches')"
+        icon="mdi-tennis"
+        class="d-sm-none mr-2"
+      />
       <v-btn @click="handleLogout" icon="mdi-logout" class="d-sm-none" />
       <v-btn
         @click="handleLogout"
@@ -150,8 +164,9 @@
                       <v-icon
                         :color="
                           userStore.profile?.teamName &&
-                          userStore.profile.teamName.trim() !== '' &&
-                          userStore.profile.teamName.toLowerCase() !== 'no team'
+                          userStore.profile?.teamName.trim() !== '' &&
+                          userStore.profile?.teamName.toLowerCase() !==
+                            'no team'
                             ? 'success'
                             : 'error'
                         "
@@ -163,8 +178,8 @@
                     <v-list-item-subtitle
                       :class="
                         userStore.profile?.teamName &&
-                        userStore.profile.teamName.trim() !== '' &&
-                        userStore.profile.teamName.toLowerCase() !== 'no team'
+                        userStore.profile?.teamName.trim() !== '' &&
+                        userStore.profile?.teamName.toLowerCase() !== 'no team'
                           ? ''
                           : 'text-error'
                       "
@@ -241,7 +256,6 @@
               </v-btn>
 
               <v-btn
-                v-if="userStore.profile && !userStore.profile.scheduleSubmitted"
                 color="success"
                 prepend-icon="mdi-check-circle"
                 @click="showFinalizeDialog = true"
@@ -413,7 +427,9 @@ const cancelEditProfile = () => {
 const saveProfile = async () => {
   try {
     const { $db } = useNuxtApp();
-    const { doc, updateDoc } = await import("firebase/firestore");
+    const { doc, updateDoc, collection, query, where, getDocs } = await import(
+      "firebase/firestore"
+    );
 
     const userRef = doc($db, "users", user.value!.uid);
     await updateDoc(userRef, {
@@ -421,6 +437,39 @@ const saveProfile = async () => {
       playerLastName: editForm.value.lastName,
       playerRating: editForm.value.rating,
     });
+
+    // Update rating in team members array if user is on a team
+    if (userStore.profile?.teamName) {
+      const teamsRef = collection($db, "teams");
+      const q = query(
+        teamsRef,
+        where("teamName", "==", userStore.profile.teamName)
+      );
+      const querySnapshot = await getDocs(q);
+
+      if (!querySnapshot.empty) {
+        const teamDoc = querySnapshot.docs[0];
+        const teamData = teamDoc.data();
+        const teamRef = doc($db, "teams", teamDoc.id);
+
+        // Update the member's rating in the members array
+        const updatedMembers = teamData.members.map((member: any) => {
+          if (member.uid === user.value?.uid) {
+            return {
+              ...member,
+              firstName: editForm.value.firstName,
+              lastName: editForm.value.lastName,
+              rating: editForm.value.rating,
+            };
+          }
+          return member;
+        });
+
+        await updateDoc(teamRef, {
+          members: updatedMembers,
+        });
+      }
+    }
 
     await userStore.updateProfile({
       playerFirstName: editForm.value.firstName,
@@ -759,7 +808,8 @@ const handleDeleteScheduleEvent = async (index: number) => {
 const handleFinalizeSchedule = async () => {
   try {
     const { $db } = useNuxtApp();
-    const { doc, updateDoc } = await import("firebase/firestore");
+    const { doc, updateDoc, collection, query, where, getDocs, orderBy } =
+      await import("firebase/firestore");
 
     // Update user's scheduleSubmitted status
     const userRef = doc($db, "users", user.value!.uid);
@@ -777,6 +827,9 @@ const handleFinalizeSchedule = async () => {
       color: "success",
       timeout: 2000,
     };
+
+    // Attempt to schedule matches
+    await schedulePickleballMatches();
   } catch (error) {
     console.error("Error finalizing schedule:", error);
     snackbar.value = {
@@ -786,5 +839,258 @@ const handleFinalizeSchedule = async () => {
       timeout: -1,
     };
   }
+};
+
+const schedulePickleballMatches = async () => {
+  try {
+    const { $db } = useNuxtApp();
+    const {
+      collection,
+      query,
+      where,
+      getDocs,
+      orderBy: firestoreOrderBy,
+      doc,
+      getDoc,
+    } = await import("firebase/firestore");
+
+    if (!userStore.profile?.teamName) {
+      return;
+    }
+
+    // Find the first unplayed match for the user's team
+    const matchesRef = collection($db, "matches");
+    const q = query(
+      matchesRef,
+      where("winner", "==", null),
+      firestoreOrderBy("round", "asc"),
+      firestoreOrderBy("createdAt", "asc")
+    );
+    const matchesSnapshot = await getDocs(q);
+
+    // Find matches where user's team is involved
+    const userMatch = matchesSnapshot.docs.find((matchDoc) => {
+      const matchData = matchDoc.data();
+      return (
+        matchData.team1 === userStore.profile?.teamName ||
+        matchData.team2 === userStore.profile?.teamName
+      );
+    });
+
+    if (!userMatch) {
+      console.log("No unplayed matches found for user's team");
+      return;
+    }
+
+    const matchData = userMatch.data();
+    const team1Name = matchData.team1;
+    const team2Name = matchData.team2;
+
+    // Fetch both teams' data
+    const teamsRef = collection($db, "teams");
+    const team1Query = query(teamsRef, where("teamName", "==", team1Name));
+    const team2Query = query(teamsRef, where("teamName", "==", team2Name));
+
+    const [team1Snapshot, team2Snapshot] = await Promise.all([
+      getDocs(team1Query),
+      getDocs(team2Query),
+    ]);
+
+    if (team1Snapshot.empty || team2Snapshot.empty) {
+      console.log("One or both teams not found");
+      return;
+    }
+
+    const team1Data = team1Snapshot.docs[0].data();
+    const team2Data = team2Snapshot.docs[0].data();
+
+    // Get all four players (2 from each team)
+    const team1Members = team1Data.members || [];
+    const team2Members = team2Data.members || [];
+
+    if (team1Members.length < 2 || team2Members.length < 2) {
+      console.log("Both teams need at least 2 players");
+      return;
+    }
+
+    // Select 2 players from each team (for now, just take first 2)
+    const selectedPlayers = [
+      ...team1Members.slice(0, 2),
+      ...team2Members.slice(0, 2),
+    ];
+
+    // Check if all 4 players have scheduleSubmitted as true
+    const playerUids = selectedPlayers.map((p) => p.uid);
+    const usersRef = collection($db, "users");
+    const playersScheduleStatus = await Promise.all(
+      playerUids.map(async (uid) => {
+        const userDocRef = doc($db, "users", uid);
+        const userDoc = await getDoc(userDocRef);
+        return userDoc.exists()
+          ? userDoc.data().scheduleSubmitted === true
+          : false;
+      })
+    );
+
+    if (!playersScheduleStatus.every((status) => status === true)) {
+      console.log("Not all players have finalized their schedules");
+      return;
+    }
+
+    // Find the first available 30-minute slot for all 4 players
+    const availableSlot = findFirstAvailableSlot(selectedPlayers);
+
+    if (availableSlot) {
+      console.log("Found available slot:", availableSlot);
+
+      // Update match document with scheduled time
+      const { updateDoc: updateMatchDoc } = await import("firebase/firestore");
+      const matchRef = doc($db, "matches", userMatch.id);
+      await updateMatchDoc(matchRef, {
+        scheduledTime: availableSlot,
+        scheduledAt: new Date(),
+      });
+
+      // Update each team member's schedule with pickleball game
+      const team1Ref = doc($db, "teams", team1Snapshot.docs[0].id);
+      const team2Ref = doc($db, "teams", team2Snapshot.docs[0].id);
+
+      // Update team 1 members' schedules
+      const updatedTeam1Members = team1Data.members.map((member: any) => {
+        // Only update the 2 selected players
+        const isSelectedPlayer = selectedPlayers
+          .slice(0, 2)
+          .some((p) => p.uid === member.uid);
+
+        if (isSelectedPlayer) {
+          return {
+            ...member,
+            schedule: [
+              ...(member.schedule || []),
+              {
+                timeSlot: availableSlot,
+                eventType: "Pickleball",
+                addedAt: new Date(),
+                matchId: userMatch.id,
+              },
+            ],
+          };
+        }
+        return member;
+      });
+
+      // Update team 2 members' schedules
+      const updatedTeam2Members = team2Data.members.map((member: any) => {
+        // Only update the 2 selected players
+        const isSelectedPlayer = selectedPlayers
+          .slice(2, 4)
+          .some((p) => p.uid === member.uid);
+
+        if (isSelectedPlayer) {
+          return {
+            ...member,
+            schedule: [
+              ...(member.schedule || []),
+              {
+                timeSlot: availableSlot,
+                eventType: "Pickleball",
+                addedAt: new Date(),
+                matchId: userMatch.id,
+              },
+            ],
+          };
+        }
+        return member;
+      });
+
+      // Save updated team documents
+      await Promise.all([
+        updateMatchDoc(team1Ref, { members: updatedTeam1Members }),
+        updateMatchDoc(team2Ref, { members: updatedTeam2Members }),
+      ]);
+
+      snackbar.value = {
+        show: true,
+        message: `Match scheduled for ${availableSlot}!`,
+        color: "success",
+        timeout: 3000,
+      };
+
+      // Refresh user's schedule to show the new pickleball game
+      await fetchUserSchedule();
+    } else {
+      console.log("No common available time slot found");
+    }
+  } catch (error) {
+    console.error("Error scheduling pickleball matches:", error);
+  }
+};
+
+const findFirstAvailableSlot = (players: any[]): string | null => {
+  // Generate all 30-minute time slots from 8 AM to 5 PM
+  const allSlots: string[] = [];
+  for (let hour = 8; hour <= 17; hour++) {
+    for (let minute of [0, 30]) {
+      if (hour === 17 && minute === 30) continue;
+      const time = new Date();
+      time.setHours(hour, minute, 0, 0);
+      const timeString = time.toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      });
+      allSlots.push(timeString);
+    }
+  }
+
+  // For each time slot, check if all 4 players are available
+  for (const slot of allSlots) {
+    const allAvailable = players.every((player) => {
+      const schedule = player.schedule || [];
+
+      console.log(schedule, player.firstName, slot);
+
+      // Find if player has an event at this time slot
+      const event = schedule.find((e: any) => e.timeSlot === slot);
+
+      console.log(event, player.firstName, slot);
+
+      // If player has volleyball or basketball at this slot, they're NOT available
+      if (
+        event &&
+        (event.eventType === "Volleyball" || event.eventType === "Basketball")
+      ) {
+        return false;
+      }
+
+      // Check if there's a volleyball/basketball game 30 minutes before
+      // that would occupy this slot
+      const slotIndex = allSlots.indexOf(slot);
+      if (slotIndex > 0) {
+        const previousSlot = allSlots[slotIndex - 1];
+        const previousEvent = schedule.find(
+          (e: any) => e.timeSlot === previousSlot
+        );
+        if (
+          previousEvent &&
+          (previousEvent.eventType === "Volleyball" ||
+            previousEvent.eventType === "Basketball")
+        ) {
+          return false;
+        }
+      }
+
+      // Player is available if:
+      // - They have no event at this slot (free time), OR
+      // - They have a non-volleyball/basketball event (which can be replaced with pickleball)
+      return true;
+    });
+
+    if (allAvailable) {
+      return slot;
+    }
+  }
+
+  return null;
 };
 </script>

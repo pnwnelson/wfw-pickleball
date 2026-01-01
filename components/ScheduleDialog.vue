@@ -64,18 +64,23 @@ const eventForm = ref({
   eventType: "",
 });
 
-// Generate time slots from 8:00 AM to 5:00 PM
+// Generate time slots from 8:00 AM to 5:00 PM with 30-minute increments
 const timeSlots = computed(() => {
   const slots = [];
   for (let hour = 8; hour <= 17; hour++) {
-    const time = new Date();
-    time.setHours(hour, 0, 0, 0);
-    const timeString = time.toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
-    slots.push(timeString);
+    for (let minute of [0, 30]) {
+      // Skip 5:30 PM
+      if (hour === 17 && minute === 30) continue;
+
+      const time = new Date();
+      time.setHours(hour, minute, 0, 0);
+      const timeString = time.toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      });
+      slots.push(timeString);
+    }
   }
   return slots;
 });
