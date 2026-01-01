@@ -1,10 +1,10 @@
 export default defineNuxtRouteMiddleware(async (to, from) => {
-  const { user, initAuth, loading } = useFirebaseAuth();
+  if (process.server) return; // Skip on server-side
 
-  // Initialize auth state if not already done
-  if (loading.value) {
-    await initAuth();
-  }
+  const { user, initAuth } = useFirebaseAuth();
+
+  // Initialize auth state and wait for it to complete
+  await initAuth();
 
   // Redirect to login if not authenticated
   if (!user.value) {

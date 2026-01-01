@@ -1,9 +1,16 @@
 <template>
   <v-app>
     <v-app-bar color="primary" elevation="2">
-      <v-app-bar-title>WFW Pickleball</v-app-bar-title>
+      <v-app-bar-title class="text-truncate">WFW Pickleball</v-app-bar-title>
       <v-spacer />
-      <v-btn @click="handleLogout" prepend-icon="mdi-logout"> Logout </v-btn>
+      <v-btn @click="handleLogout" icon="mdi-logout" class="d-sm-none" />
+      <v-btn
+        @click="handleLogout"
+        prepend-icon="mdi-logout"
+        class="d-none d-sm-flex"
+      >
+        Logout
+      </v-btn>
     </v-app-bar>
 
     <v-main>
@@ -11,11 +18,33 @@
         <v-row>
           <v-col cols="12">
             <v-card>
-              <v-card-title class="text-h4"> Profile </v-card-title>
+              <v-card-title class="d-flex align-center">
+                <span class="text-h4">Profile</span>
+                <v-spacer />
+                <v-btn
+                  v-if="!isEditingProfile"
+                  icon="mdi-pencil"
+                  variant="text"
+                  @click="startEditProfile"
+                />
+                <v-btn
+                  v-else
+                  icon="mdi-check"
+                  variant="text"
+                  color="success"
+                  @click="saveProfile"
+                />
+                <v-btn
+                  v-if="isEditingProfile"
+                  icon="mdi-close"
+                  variant="text"
+                  @click="cancelEditProfile"
+                />
+              </v-card-title>
 
               <v-card-text>
                 <v-list v-if="!userStore.loading">
-                  <v-list-item v-if="userStore.profile">
+                  <v-list-item v-if="userStore.profile && !isEditingProfile">
                     <template #prepend>
                       <v-icon>mdi-account</v-icon>
                     </template>
@@ -24,6 +53,29 @@
                       {{ userStore.profile.playerFirstName }}
                       {{ userStore.profile.playerLastName }}
                     </v-list-item-subtitle>
+                  </v-list-item>
+
+                  <v-list-item v-if="userStore.profile && isEditingProfile">
+                    <template #prepend>
+                      <v-icon>mdi-account</v-icon>
+                    </template>
+                    <v-list-item-title>Name</v-list-item-title>
+                    <div class="d-flex ga-2 mt-2">
+                      <v-text-field
+                        v-model="editForm.firstName"
+                        label="First Name"
+                        variant="outlined"
+                        density="compact"
+                        hide-details
+                      />
+                      <v-text-field
+                        v-model="editForm.lastName"
+                        label="Last Name"
+                        variant="outlined"
+                        density="compact"
+                        hide-details
+                      />
+                    </div>
                   </v-list-item>
 
                   <v-list-item>
@@ -46,31 +98,77 @@
                     </v-list-item-subtitle>
                   </v-list-item>
 
-                  <v-list-item>
+                  <v-list-item v-if="!isEditingProfile">
                     <template #prepend>
-                      <v-icon>mdi-star</v-icon>
+                      <v-icon
+                        :color="
+                          userStore?.profile?.playerRating
+                            ? 'yellow-darken-2'
+                            : ''
+                        "
+                      >
+                        mdi-star
+                      </v-icon>
                     </template>
                     <v-list-item-title>DUPR Rating</v-list-item-title>
                     <v-list-item-subtitle>
                       {{
                         userStore?.profile?.playerRating
-                          ? userStore.profile.teamName
+                          ? userStore.profile.playerRating
                           : "No Rating"
                       }}
                     </v-list-item-subtitle>
                   </v-list-item>
 
+                  <v-list-item v-if="isEditingProfile">
+                    <template #prepend>
+                      <v-icon
+                        :color="
+                          userStore?.profile?.playerRating
+                            ? 'yellow-darken-2'
+                            : ''
+                        "
+                      >
+                        mdi-star
+                      </v-icon>
+                    </template>
+                    <v-list-item-title>DUPR Rating</v-list-item-title>
+                    <v-text-field
+                      v-model="editForm.rating"
+                      label="DUPR Rating"
+                      variant="outlined"
+                      density="compact"
+                      type="number"
+                      step="0.1"
+                      hide-details
+                      class="mt-2"
+                    />
+                  </v-list-item>
+
                   <v-list-item>
                     <template #prepend>
                       <v-icon
-                        :color="!userStore?.profile?.teamName ? 'error' : ''"
+                        :color="
+                          !userStore?.profile?.teamName ||
+                          userStore?.profile?.teamName.trim() === '' ||
+                          userStore?.profile?.teamName.toLowerCase() ===
+                            'no team'
+                            ? 'error'
+                            : 'success'
+                        "
                       >
                         mdi-account-group
                       </v-icon>
                     </template>
                     <v-list-item-title>Team Name</v-list-item-title>
                     <v-list-item-subtitle
-                      :class="!userStore?.profile?.teamName ? 'text-error' : ''"
+                      :class="
+                        !userStore?.profile?.teamName ||
+                        userStore?.profile?.teamName.trim() === '' ||
+                        userStore?.profile?.teamName.toLowerCase() === 'no team'
+                          ? 'text-error'
+                          : ''
+                      "
                     >
                       {{
                         userStore?.profile?.teamName
@@ -125,6 +223,15 @@
               </v-btn>
 
               <v-btn
+                v-if="userStore.profile && userStore.profile.teamName"
+                color="primary"
+                prepend-icon="mdi-account-switch"
+                @click="handleAddTeam"
+              >
+                Change Team
+              </v-btn>
+
+              <v-btn
                 v-if="userStore.profile && !userStore.profile.scheduleSubmitted"
                 color="secondary"
                 prepend-icon="mdi-calendar-plus"
@@ -137,6 +244,21 @@
         </v-row>
       </v-container>
     </v-main>
+
+    <TeamDialog
+      v-model="showTeamDialog"
+      @submit="handleTeamDialogSubmit"
+      @input-focus="snackbar.show = false"
+    />
+
+    <v-snackbar
+      v-model="snackbar.show"
+      :color="snackbar.color"
+      location="top"
+      :timeout="snackbar.timeout"
+    >
+      {{ snackbar.message }}
+    </v-snackbar>
   </v-app>
 </template>
 
@@ -148,6 +270,21 @@ definePageMeta({
 
 const { user, logout } = useFirebaseAuth();
 const userStore = useUserStore();
+
+const showTeamDialog = ref(false);
+const snackbar = ref({
+  show: false,
+  message: "",
+  color: "error",
+  timeout: -1,
+});
+
+const isEditingProfile = ref(false);
+const editForm = ref({
+  firstName: "",
+  lastName: "",
+  rating: "",
+});
 
 // Fetch user profile if not already loaded
 onMounted(async () => {
@@ -171,9 +308,202 @@ const handleLogout = async () => {
   }
 };
 
+const startEditProfile = () => {
+  editForm.value = {
+    firstName: userStore.profile?.playerFirstName || "",
+    lastName: userStore.profile?.playerLastName || "",
+    rating: userStore.profile?.playerRating || "",
+  };
+  isEditingProfile.value = true;
+};
+
+const cancelEditProfile = () => {
+  isEditingProfile.value = false;
+  editForm.value = { firstName: "", lastName: "", rating: "" };
+};
+
+const saveProfile = async () => {
+  try {
+    const { $db } = useNuxtApp();
+    const { doc, updateDoc } = await import("firebase/firestore");
+
+    const userRef = doc($db, "users", user.value!.uid);
+    await updateDoc(userRef, {
+      playerFirstName: editForm.value.firstName,
+      playerLastName: editForm.value.lastName,
+      playerRating: editForm.value.rating,
+    });
+
+    await userStore.updateProfile({
+      playerFirstName: editForm.value.firstName,
+      playerLastName: editForm.value.lastName,
+      playerRating: editForm.value.rating,
+    });
+
+    isEditingProfile.value = false;
+    snackbar.value = {
+      show: true,
+      message: "Profile updated successfully!",
+      color: "success",
+      timeout: 2000,
+    };
+  } catch (error) {
+    console.error("Error updating profile:", error);
+    snackbar.value = {
+      show: true,
+      message: "Failed to update profile. Please try again.",
+      color: "error",
+      timeout: -1,
+    };
+  }
+};
+
 const handleAddTeam = () => {
-  // TODO: Navigate to team creation page or open dialog
-  console.log("Add team clicked");
+  showTeamDialog.value = true;
+};
+
+const handleTeamDialogSubmit = async (data: {
+  type: "search" | "create";
+  teamName: string;
+}) => {
+  if (data.type === "search") {
+    // Join existing team
+    try {
+      const { $db } = useNuxtApp();
+      const {
+        collection,
+        doc,
+        updateDoc,
+        query,
+        where,
+        getDocs,
+        arrayUnion,
+        arrayRemove,
+      } = await import("firebase/firestore");
+
+      // If user has a previous team, remove them from it
+      if (userStore.profile?.teamName) {
+        const oldTeamsRef = collection($db, "teams");
+        const oldTeamQuery = query(
+          oldTeamsRef,
+          where("teamName", "==", userStore.profile.teamName)
+        );
+        const oldTeamSnapshot = await getDocs(oldTeamQuery);
+
+        if (!oldTeamSnapshot.empty) {
+          const oldTeamDoc = oldTeamSnapshot.docs[0];
+          const oldTeamRef = doc($db, "teams", oldTeamDoc.id);
+          await updateDoc(oldTeamRef, {
+            members: arrayRemove({
+              uid: user.value?.uid,
+              firstName: userStore.profile?.playerFirstName,
+              lastName: userStore.profile?.playerLastName,
+              rating: userStore.profile?.playerRating,
+            }),
+          });
+        }
+      }
+
+      // Find the new team document
+      const teamsRef = collection($db, "teams");
+      const q = query(teamsRef, where("teamName", "==", data.teamName));
+      const querySnapshot = await getDocs(q);
+
+      if (querySnapshot.empty) {
+        snackbar.value = {
+          show: true,
+          message: "Team not found.",
+          color: "error",
+          timeout: -1,
+        };
+        return;
+      }
+
+      const teamDoc = querySnapshot.docs[0];
+
+      // Add user to new team members array
+      const teamRef = doc($db, "teams", teamDoc.id);
+      await updateDoc(teamRef, {
+        members: arrayUnion({
+          uid: user.value?.uid,
+          firstName: userStore.profile?.playerFirstName,
+          lastName: userStore.profile?.playerLastName,
+          rating: userStore.profile?.playerRating,
+        }),
+      });
+
+      // Update user's teamName
+      const userRef = doc($db, "users", user.value!.uid);
+      await updateDoc(userRef, {
+        teamName: data.teamName,
+      });
+
+      // Update local store
+      await userStore.updateProfile({ teamName: data.teamName });
+
+      console.log("Successfully joined team:", data.teamName);
+    } catch (error) {
+      console.error("Error joining team:", error);
+      snackbar.value = {
+        show: true,
+        message: "Failed to join team. Please try again.",
+        color: "error",
+        timeout: -1,
+      };
+    }
+  } else {
+    // Create new team
+    try {
+      const { $db } = useNuxtApp();
+      const { collection, addDoc, doc, updateDoc, query, where, getDocs } =
+        await import("firebase/firestore");
+
+      // Check if team name already exists
+      const teamsRef = collection($db, "teams");
+      const q = query(teamsRef, where("teamName", "==", data.teamName));
+      const querySnapshot = await getDocs(q);
+
+      if (!querySnapshot.empty) {
+        console.error("Team name already exists");
+        snackbar.value = {
+          show: true,
+          message:
+            "A team with this name already exists. Please choose a different name.",
+          color: "error",
+          timeout: -1,
+        };
+        return;
+      }
+
+      // Create team document
+      const teamRef = await addDoc(collection($db, "teams"), {
+        teamName: data.teamName,
+        ownerId: user.value?.uid,
+        members: [
+          {
+            uid: user.value?.uid,
+            firstName: userStore.profile?.playerFirstName,
+            lastName: userStore.profile?.playerLastName,
+            rating: userStore.profile?.playerRating,
+          },
+        ],
+        createdAt: new Date(),
+      });
+
+      // Update user's teamName
+      const userRef = doc($db, "users", user.value!.uid);
+      await updateDoc(userRef, {
+        teamName: data.teamName,
+      });
+
+      // Update local store
+      await userStore.updateProfile({ teamName: data.teamName });
+
+      console.log("Team created successfully:", teamRef.id);
+    } catch (error) {
+      console.error("Error creating team:", error);
+    }
+  }
 };
 
 const handleAddSchedule = () => {
